@@ -9,6 +9,7 @@ if (empty($feed)) {
 
 header('Content-type: application/atom+xml; charset=' . get_settings('blog_charset'), true);
 $more = 1;
+$teste = 90;
 
 ?>
 <?php echo '<?xml version="1.0" encoding="'.get_settings('blog_charset').'"?'.'>'; ?>
