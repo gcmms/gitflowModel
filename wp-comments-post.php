@@ -1,63 +1,81 @@
 <?php
-require( dirname(__FILE__) . '/wp-config.php' );
+/**
+ * Handles Comment Post to WordPress and prevents duplicate comment posting.
+ *
+ * @package WordPress
+ */
 
-$comment_post_ID = (int) $_POST['comment_post_ID'];
+if ( 'POST' !== $_SERVER['REQUEST_METHOD'] ) {
+	$protocol = $_SERVER['SERVER_PROTOCOL'];
+	if ( ! in_array( $protocol, array( 'HTTP/1.1', 'HTTP/2', 'HTTP/2.0' ), true ) ) {
+		$protocol = 'HTTP/1.0';
+	}
 
-$status = $wpdb->get_row("SELECT post_status, comment_status FROM $wpdb->posts WHERE ID = '$comment_post_ID'");
-
-if ( empty($status->comment_status) ) {
-	do_action('comment_id_not_found', $comment_post_ID);
-	exit;
-} elseif ( 'closed' ==  $status->comment_status ) {
-	do_action('comment_closed', $comment_post_ID);
-	die( __('Sorry, comments are closed for this item.') );
-} elseif ( 'draft' == $status->post_status ) {
-	do_action('comment_on_draft', $comment_post_ID);
+	header( 'Allow: POST' );
+	header( "$protocol 405 Method Not Allowed" );
+	header( 'Content-Type: text/plain' );
 	exit;
 }
 
-$comment_author       = trim($_POST['author']);
-$comment_author_email = trim($_POST['email']);
-$comment_author_url   = trim($_POST['url']);
-$comment_content      = trim($_POST['comment']);
+/** Sets up the WordPress Environment. */
+require __DIR__ . '/wp-load.php';
 
-// If the user is logged in
-get_currentuserinfo();
-if ( $user_ID ) :
-	$comment_author       = addslashes($user_identity);
-	$comment_author_email = addslashes($user_email);
-	$comment_author_url   = addslashes($user_url);
-else :
-	if ( get_option('comment_registration') )
-		die( __('Sorry, you must be logged in to post a comment.') );
-endif;
+nocache_headers();
 
-$comment_type = '';
-
-if ( get_settings('require_name_email') && !$user_ID ) {
-	if ( 6 > strlen($comment_author_email) || '' == $comment_author )
-		die( __('Error: please fill the required fields (name, email).') );
-	elseif ( !is_email($comment_author_email))
-		die( __('Error: please enter a valid email address.') );
+$comment = wp_handle_comment_submission( wp_unslash( $_POST ) );
+if ( is_wp_error( $comment ) ) {
+	$data = intval( $comment->get_error_data() );
+	if ( ! empty( $data ) ) {
+		wp_die(
+			'<p>' . $comment->get_error_message() . '</p>',
+			__( 'Comment Submission Failure' ),
+			array(
+				'response'  => $data,
+				'back_link' => true,
+			)
+		);
+	} else {
+		exit;
+	}
 }
 
-if ( '' == $comment_content )
-	die( __('Error: please type a comment.') );
+$user            = wp_get_current_user();
+$cookies_consent = ( isset( $_POST['wp-comment-cookies-consent'] ) );
 
-$commentdata = compact('comment_post_ID', 'comment_author', 'comment_author_email', 'comment_author_url', 'comment_content', 'comment_type', 'user_ID');
+/**
+ * Perform other actions when comment cookies are set.
+ *
+ * @since 3.4.0
+ * @since 4.9.6 The `$cookies_consent` parameter was added.
+ *
+ * @param WP_Comment $comment         Comment object.
+ * @param WP_User    $user            Comment author's user object. The user may not exist.
+ * @param bool       $cookies_consent Comment author's consent to store cookies.
+ */
+do_action( 'set_comment_cookies', $comment, $user, $cookies_consent );
 
-wp_new_comment($commentdata);
+$location = empty( $_POST['redirect_to'] ) ? get_comment_link( $comment ) : $_POST['redirect_to'] . '#comment-' . $comment->comment_ID;
 
-setcookie('comment_author_' . COOKIEHASH, stripslashes($comment_author), time() + 30000000, COOKIEPATH);
-setcookie('comment_author_email_' . COOKIEHASH, stripslashes($comment_author_email), time() + 30000000, COOKIEPATH);
-setcookie('comment_author_url_' . COOKIEHASH, stripslashes($comment_author_url), time() + 30000000, COOKIEPATH);
+// If user didn't consent to cookies, add specific query arguments to display the awaiting moderation message.
+if ( ! $cookies_consent && 'unapproved' === wp_get_comment_status( $comment ) && ! empty( $comment->comment_author_email ) ) {
+	$location = add_query_arg(
+		array(
+			'unapproved'      => $comment->comment_ID,
+			'moderation-hash' => wp_hash( $comment->comment_date_gmt ),
+		),
+		$location
+	);
+}
 
-header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
-header('Last-Modified: ' . gmdate('D, d M Y H:i:s') . ' GMT');
-header('Cache-Control: no-cache, must-revalidate, max-age=0');
-header('Pragma: no-cache');
+/**
+ * Filters the location URI to send the commenter after posting.
+ *
+ * @since 2.0.5
+ *
+ * @param string     $location The 'redirect_to' URI sent via $_POST.
+ * @param WP_Comment $comment  Comment object.
+ */
+$location = apply_filters( 'comment_post_redirect', $location, $comment );
 
-$location = ( empty( $_POST['redirect_to'] ) ) ? get_permalink( $comment_post_ID ) : $_POST['redirect_to']; 
-
-wp_redirect($location);
-?>
+wp_safe_redirect( $location );
+exit;
