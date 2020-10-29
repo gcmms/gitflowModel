@@ -21,7 +21,7 @@ if ( force_ssl_admin() && ! is_ssl() ) {
 		exit;
 	}
 }
-
+//BGug Da tela de login
 /**
  * Output the login page header.
  *
